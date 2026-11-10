@@ -4,7 +4,7 @@
   const config = window.SHILOH_CONFIG || {};
   const ready = !!(window.supabase && config.supabaseUrl?.startsWith('https://') && config.supabaseAnonKey && !config.supabaseAnonKey.includes('YOUR_'));
   const db = ready ? window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey) : null;
-  const categories = ['All','Worship','Meetings','Outreach','Training','Other'];
+  let categories = [];
   const today = new Date();
   let month = new Date(today.getFullYear(), today.getMonth(), 1);
   let filter = 'All', events = [], session = null, isAdmin = false, isOwner = false, adminDirectory = [];
@@ -26,9 +26,20 @@
   function applyAccess() {
     $('adminBar').hidden = !isAdmin;
     $('adminUsersBtn').hidden = !isOwner;
+    $('manageCategoriesBtn').hidden = !isAdmin;
     $('userBadge').hidden = !session;
     $('userBadge').textContent = session?.user?.email || '';
     $('loginBtn').textContent = session ? 'Sign Out' : 'Admin Login';
+  }
+  async function fetchCategories() {
+    if (!db) return;
+    const {data,error} = await db.from('calendar_categories').select('name').order('name');
+    if (error) {
+      notify('Unable to load categories. Run the new Supabase category migration: '+errorText(error),'error');
+      return;
+    }
+    categories = (data || []).map(x => x.name);
+    render();
   }
   async function fetchEvents() {
     if (!db) return;
@@ -50,7 +61,7 @@
       isOwner = o.data === true && !o.error;
       if (!isAdmin) notify('This email account is not authorized to administer the Ministerium calendar.','error');
     }
-    applyAccess();await fetchEvents();
+    applyAccess();await Promise.all([fetchCategories(),fetchEvents()]);
   }
   async function doLogin() {
     if (!db) {notify('Administrator login requires the Supabase configuration to be completed.','error');return;}
@@ -63,13 +74,13 @@
       // Only pre-provisioned authentication users may request a sign-in link.
       const {error} = await db.auth.signInWithOtp({email, options:{shouldCreateUser:false,emailRedirectTo:location.origin+location.pathname}});
       $('sendLogin').disabled = false;
-      if(error){$('loginError').textContent = errorText(error);return;}
+      if(error){$('loginError').textContent = /signups not allowed for otp/i.test(errorText(error)) ? 'This email is not yet registered under Supabase Authentication → Users. An owner must invite/create the account first, even if the email already appears in calendar_admins.' : errorText(error);return;}
       closeModal();notify('If this address has been registered, a secure sign-in link has been sent.','success');
     };
   }
   function showDetails(id) {
     const e=events.find(x=>x.id===id); if(!e)return;
-    showModal(e.title, '<p><strong>'+esc(readable(e.event_date))+'</strong><br>'+esc(prettyTime(e.start_time))+(e.end_time?' – '+esc(prettyTime(e.end_time)):'')+' · '+esc(e.category)+'</p><p>📍 '+esc(e.location||'Location to be announced')+'</p><p>'+esc(e.description||'No additional details.')+'</p>'+(isAdmin?'<p><small>'+ (e.published?'Published':'Unpublished draft') +'</small></p>':'')+'<div class="actions"><button id="closeDetails" class="btn">Close</button>'+(isAdmin?'<button id="editEvent" class="btn primary">Edit</button><button id="deleteEvent" class="btn">Delete</button>':'')+'</div>');
+    showModal(e.title, '<p><strong>'+esc(readable(e.event_date))+'</strong><br>'+esc(prettyTime(e.start_time))+(e.end_time?' – '+esc(prettyTime(e.end_time)):'')+' · '+esc(e.category||'Uncategorized')+'</p><p>📍 '+esc(e.location||'Location to be announced')+'</p><p>'+esc(e.description||'No additional details.')+'</p>'+(isAdmin?'<p><small>'+ (e.published?'Published':'Unpublished draft') +'</small></p>':'')+'<div class="actions"><button id="closeDetails" class="btn">Close</button>'+(isAdmin?'<button id="editEvent" class="btn primary">Edit</button><button id="deleteEvent" class="btn">Delete</button>':'')+'</div>');
     $('closeDetails').onclick=closeModal;
     if(isAdmin) {
       $('editEvent').onclick=()=>showEventForm(id);
@@ -83,22 +94,63 @@
   }
   function showEventForm(id) {
     if(!isAdmin)return;
-    const e=events.find(x=>x.id===id)||{title:'',event_date:dateKey(today),start_time:'18:00',end_time:'',category:'Meetings',location:'',description:'',published:true};
-    const opts=categories.slice(1).map(c=>'<option '+(e.category===c?'selected':'')+'>'+esc(c)+'</option>').join('');
-    showModal(id?'Edit Event':'Add Event', '<form id="eventForm"><label class="field" for="title">Event title *</label><input class="fieldinput" id="title" maxlength="120" required value="'+esc(e.title)+'"><label class="field" for="eventDate">Date *</label><input class="fieldinput" id="eventDate" type="date" required value="'+esc(e.event_date)+'"><label class="field" for="startTime">Start time *</label><input class="fieldinput" id="startTime" type="time" required value="'+esc(e.start_time.slice(0,5))+'"><label class="field" for="endTime">End time</label><input class="fieldinput" id="endTime" type="time" value="'+esc((e.end_time||'').slice(0,5))+'"><label class="field" for="category">Category</label><select class="fieldinput" id="category">'+opts+'</select><label class="field" for="location">Location</label><input class="fieldinput" id="location" maxlength="200" value="'+esc(e.location)+'"><label class="field" for="description">Description</label><textarea class="fieldinput" id="description" rows="4" maxlength="3000">'+esc(e.description)+'</textarea><label class="field"><input type="checkbox" id="published" '+(e.published?'checked':'')+'> Publish on public calendar</label><div class="form-error" id="eventError" role="alert"></div><div class="actions"><button type="button" id="cancelEvent" class="btn">Cancel</button><button type="submit" id="saveEvent" class="btn primary">Save Event</button></div></form>');
+    const e=events.find(x=>x.id===id)||{title:'',event_date:dateKey(today),start_time:'18:00',end_time:'',category:null,location:'',description:'',published:true};
+    const opts='<option value="">No category</option>'+categories.map(c=>'<option '+(e.category===c?'selected':'')+' value="'+esc(c)+'">'+esc(c)+'</option>').join('');
+    showModal(id?'Edit Event':'Add Event', '<form id="eventForm"><label class="field" for="title">Event title *</label><input class="fieldinput" id="title" maxlength="120" required value="'+esc(e.title)+'"><label class="field" for="eventDate">Date *</label><input class="fieldinput" id="eventDate" type="date" required value="'+esc(e.event_date)+'"><label class="field" for="startTime">Start time *</label><input class="fieldinput" id="startTime" type="time" required value="'+esc(e.start_time.slice(0,5))+'"><label class="field" for="endTime">End time</label><input class="fieldinput" id="endTime" type="time" value="'+esc((e.end_time||'').slice(0,5))+'"><label class="field" for="category">Category</label><select class="fieldinput" id="category">'+opts+'</select><label class="field" for="newEventCategory">Or create a new category</label><input class="fieldinput" id="newEventCategory" maxlength="80" placeholder="New category (optional)"><label class="field" for="location">Location</label><input class="fieldinput" id="location" maxlength="200" value="'+esc(e.location)+'"><label class="field" for="description">Description</label><textarea class="fieldinput" id="description" rows="4" maxlength="3000">'+esc(e.description)+'</textarea><label class="field"><input type="checkbox" id="published" '+(e.published?'checked':'')+'> Publish on public calendar</label><div class="form-error" id="eventError" role="alert"></div><div class="actions"><button type="button" id="cancelEvent" class="btn">Cancel</button><button type="submit" id="saveEvent" class="btn primary">Save Event</button></div></form>');
     $('cancelEvent').onclick=closeModal;
     $('eventForm').onsubmit=async ev=>{
       ev.preventDefault();$('eventError').textContent='';
       const start=$('startTime').value,end=$('endTime').value||null;
       if(end && end<=start){$('eventError').textContent='End time must be after start time.';return;}
       $('saveEvent').disabled=true;
-      const payload={title:$('title').value.trim(),event_date:$('eventDate').value,start_time:start,end_time:end,category:$('category').value,location:$('location').value.trim(),description:$('description').value.trim(),published:$('published').checked};
+      let category=$('category').value || null;
+      const newCategory=$('newEventCategory').value.trim();
+      if (newCategory) {
+        const existing=categories.find(c=>c.toLowerCase()===newCategory.toLowerCase());
+        if (existing) category=existing;
+        else {
+          const insert=await db.from('calendar_categories').insert({name:newCategory}).select('name').single();
+          if (insert.error) { $('saveEvent').disabled=false; $('eventError').textContent='Unable to add category: '+errorText(insert.error);return; }
+          category=insert.data.name;
+          await fetchCategories();
+        }
+      }
+      const payload={title:$('title').value.trim(),event_date:$('eventDate').value,start_time:start,end_time:end,category,location:$('location').value.trim(),description:$('description').value.trim(),published:$('published').checked};
       const res=id?await db.from('calendar_events').update(payload).eq('id',id):await db.from('calendar_events').insert(payload);
       $('saveEvent').disabled=false;
       if(res.error){$('eventError').textContent=errorText(res.error);return;}
       const [y,m]=payload.event_date.split('-').map(Number);
       month=new Date(y,m-1,1);
       closeModal();await fetchEvents();notify(id?'Event updated.':'Event created.','success');
+    };
+  }
+  async function manageCategories() {
+    if (!isAdmin) return;
+    await fetchCategories();
+    showModal('Manage Event Categories',
+      '<p>Create categories for the event form. Only categories associated with events appear as public filters.</p><div id="categoryList"></div>'+
+      '<form id="categoryForm"><label class="field" for="categoryName">New category</label>'+
+      '<input class="fieldinput" id="categoryName" maxlength="80" required placeholder="For example: Ministerium Retreat">'+
+      '<div class="form-error" id="categoryError" role="alert"></div><div class="actions"><button class="btn primary" type="submit">Add Category</button></div></form>');
+    const draw=()=>{
+      $('categoryList').innerHTML=categories.length?categories.map(c=>'<div class="admin-entry"><span>'+esc(c)+'</span><button class="btn" type="button" data-category="'+esc(c)+'">Delete</button></div>').join(''):'<p class="empty">No categories have been created.</p>';
+      $('categoryList').querySelectorAll('[data-category]').forEach(btn=>btn.onclick=async()=>{
+        const name=btn.dataset.category;
+        if(!confirm('Delete category "'+name+'"? Events with this category will be kept but become uncategorized.'))return;
+        const {error}=await db.from('calendar_categories').delete().eq('name',name);
+        if(error){$('categoryError').textContent=errorText(error);return;}
+        if(filter===name)filter='All';
+        await Promise.all([fetchCategories(),fetchEvents()]);draw();
+      });
+    };
+    draw();
+    $('categoryForm').onsubmit=async ev=>{
+      ev.preventDefault();$('categoryError').textContent='';
+      const name=$('categoryName').value.trim();
+      if(!name){$('categoryError').textContent='Enter a category name.';return;}
+      const {error}=await db.from('calendar_categories').insert({name});
+      if(error){$('categoryError').textContent=errorText(error);return;}
+      $('categoryName').value='';await fetchCategories();draw();
     };
   }
   async function manageAdmins() {
@@ -128,14 +180,16 @@
   function render() {
     const y=month.getFullYear(),m=month.getMonth();
     $('monthTitle').textContent=month.toLocaleDateString('en-US',{month:'long',year:'numeric'});
-    $('filters').innerHTML=categories.map(c=>'<button class="chip '+(filter===c?'active':'')+'" data-filter="'+esc(c)+'" type="button">'+esc(c)+'</button>').join('');
+    const usedCategories=[...new Set(events.map(e=>e.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    if(filter!=='All' && !usedCategories.includes(filter)) filter='All';
+    $('filters').innerHTML=['All',...usedCategories].map(c=>'<button class="chip '+(filter===c?'active':'')+'" data-filter="'+esc(c)+'" type="button">'+esc(c)+'</button>').join('');
     $('filters').querySelectorAll('button').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;render();});
     const start=new Date(y,m,1).getDay(),daysInMonth=new Date(y,m+1,0).getDate();
     const count=Math.ceil((start+daysInMonth)/7)*7;let html='';
     for(let i=0;i<count;i++){
       const d=new Date(y,m,i-start+1),key=dateKey(d);
       const list=events.filter(e=>e.event_date===key&&(filter==='All'||e.category===filter));
-      html+='<div class="day '+(d.getMonth()!==m?'out':'')+' '+(key===dateKey(today)?'today':'')+'"><span class="day-number">'+d.getDate()+'</span>'+list.map(e=>'<button class="event '+esc(e.category.toLowerCase())+'" type="button" data-id="'+esc(e.id)+'" title="'+esc(e.title)+'">'+(isAdmin&&!e.published?'◌ ':'')+esc(e.title)+'</button>').join('')+'</div>';
+      html+='<div class="day '+(d.getMonth()!==m?'out':'')+' '+(key===dateKey(today)?'today':'')+'"><span class="day-number">'+d.getDate()+'</span>'+list.map(e=>'<button class="event '+esc((e.category || 'uncategorized').toLowerCase())+'" type="button" data-id="'+esc(e.id)+'" title="'+esc(e.title)+'">'+(isAdmin&&!e.published?'◌ ':'')+esc(e.title)+'</button>').join('')+'</div>';
     }
     $('days').innerHTML=html;
     $('days').querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>showDetails(b.dataset.id));
@@ -152,6 +206,7 @@
   $('loginBtn').onclick=async()=>{if(!session)await doLogin();else {await db.auth.signOut();await refreshAuth();notify('Signed out.','success');}};
   $('addBtn').onclick=()=>showEventForm(null);
   $('adminUsersBtn').onclick=manageAdmins;
+  $('manageCategoriesBtn').onclick=manageCategories;
   $('prevBtn').onclick=()=>{month=new Date(month.getFullYear(),month.getMonth()-1,1);render();};
   $('nextBtn').onclick=()=>{month=new Date(month.getFullYear(),month.getMonth()+1,1);render();};
   $('todayBtn').onclick=()=>{month=new Date(today.getFullYear(),today.getMonth(),1);render();};
