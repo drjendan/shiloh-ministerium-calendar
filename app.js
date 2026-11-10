@@ -7,7 +7,7 @@
   let categories = [];
   const today = new Date();
   let month = new Date(today.getFullYear(), today.getMonth(), 1);
-  let filter = 'All', events = [], session = null, isMember = false, isAdmin = false, isOwner = false, adminDirectory = [];
+  let filter = 'All', events = [], session = null, isMember = false, isAdmin = false, isOwner = false, adminDirectory = [], previewAdmin = false;
   const pad = n => String(n).padStart(2,'0');
   const dateKey = d => [d.getFullYear(),pad(d.getMonth()+1),pad(d.getDate())].join('-');
   const esc = x => String(x ?? '').replace(/[&<>"']/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
@@ -24,14 +24,19 @@
   };
   const closeModal = () => { $('overlay').hidden = true; };
   function applyAccess() {
-    $('adminBar').hidden = !isAdmin;
-    $('adminUsersBtn').hidden = !isOwner;
-    $('manageMembersBtn').hidden = !isOwner;
-    $('privateApp').hidden = !isMember;
-    $('manageCategoriesBtn').hidden = !isAdmin;
+    $('adminBar').hidden = !isAdmin && !previewAdmin;
+    $('adminUsersBtn').hidden = !isOwner && !previewAdmin;
+    $('manageMembersBtn').hidden = !isOwner && !previewAdmin;
+    $('privateApp').hidden = false;
+    $('previewNotice').hidden = isMember;
+    $('manageCategoriesBtn').hidden = !isAdmin && !previewAdmin;
     $('userBadge').hidden = !session;
     $('userBadge').textContent = session?.user?.email || '';
-    $('loginBtn').textContent = session && isMember ? 'Sign Out' : 'Member Sign In';
+    $('loginBtn').hidden = !(session && isMember);
+    $('loginBtn').textContent = 'Sign Out';
+    $('previewBtn').hidden = isMember;
+    $('previewBtn').textContent = previewAdmin ? 'Exit Admin Preview' : 'Admin Preview';
+    if(previewAdmin && !isMember) { $('adminBar').querySelector('strong').textContent = 'Admin interface preview'; $('adminBar').querySelector('span').textContent = ' View the administrator tools without changing private data.'; } else { $('adminBar').querySelector('strong').textContent = 'Calendar administration'; $('adminBar').querySelector('span').textContent = ' Manage events and administrator access.'; }
   }
   async function fetchCategories() {
     if (!db || !isMember) return;
@@ -58,14 +63,12 @@
     session = s; isMember = false; isAdmin = false; isOwner = false;
     if (!session) {
       applyAccess();
-      location.replace('/admin.html');
       return;
     }
     const memberCheck = await db.rpc('calendar_can_view');
     if (memberCheck.error || memberCheck.data !== true) {
       applyAccess();
       await db.auth.signOut();
-      location.replace('/admin.html');
       return;
     }
     isMember = true;
@@ -249,15 +252,26 @@
   $('closeModal').onclick=closeModal;
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('overlay').hidden)closeModal();});
   $('loginBtn').onclick=async()=>{if(!session || !isMember){location.assign('/admin.html');return;} await db.auth.signOut();location.replace('/admin.html');};
-  $('addBtn').onclick=()=>showEventForm(null);
-  $('adminUsersBtn').onclick=manageAdmins;
-  $('manageMembersBtn').onclick=manageMembers;
-  $('manageCategoriesBtn').onclick=manageCategories;
+  function showPreview(section) {
+    const sample = {
+      event: '<p>This is the administrator event form layout. It is disabled in preview mode; no real events can be created or changed.</p><label class="field">Event title</label><input class="fieldinput" disabled placeholder="Ministry event"><label class="field">Date</label><input class="fieldinput" type="date" disabled><label class="field">Start time</label><input class="fieldinput" type="time" disabled><label class="field">Category</label><select class="fieldinput" disabled><option>Select an admin-created category</option></select><label class="field">Location</label><input class="fieldinput" disabled placeholder="Location"><label class="field">Description</label><textarea class="fieldinput" rows="2" disabled></textarea><div class="actions"><button class="btn primary" disabled>Save Event</button></div>',
+      categories: '<p>Administrators can add or remove event categories here. Public filters only appear when a category is used by an event.</p><label class="field">New category</label><input class="fieldinput" disabled placeholder="Enter category"><div class="actions"><button class="btn primary" disabled>Add Category</button></div>',
+      members: '<p>The owner can approve and remove members. Only approved accounts can see the actual private calendar.</p><label class="field">Member email address</label><input class="fieldinput" disabled placeholder="member@example.com"><div class="actions"><button class="btn primary" disabled>Approve Member</button></div>',
+      admins: '<p>The owner can assign administrative permissions to approved accounts. Only authenticated administrators can make changes.</p><label class="field">Administrator email address</label><input class="fieldinput" disabled placeholder="admin@example.com"><div class="actions"><button class="btn primary" disabled>Add Administrator</button></div>'
+    };
+    const labels = {event:'Add Event',categories:'Manage Categories',members:'Manage Members',admins:'Manage Administrators'};
+    showModal(labels[section] + ' — Preview', sample[section]);
+  }
+  $('previewBtn').onclick=()=>{previewAdmin=!previewAdmin;applyAccess();};
+  $('addBtn').onclick=()=>previewAdmin && !isAdmin ? showPreview('event') : showEventForm(null);
+  $('adminUsersBtn').onclick=()=>previewAdmin && !isOwner ? showPreview('admins') : manageAdmins();
+  $('manageMembersBtn').onclick=()=>previewAdmin && !isOwner ? showPreview('members') : manageMembers();
+  $('manageCategoriesBtn').onclick=()=>previewAdmin && !isAdmin ? showPreview('categories') : manageCategories();
   $('prevBtn').onclick=()=>{month=new Date(month.getFullYear(),month.getMonth()-1,1);render();};
   $('nextBtn').onclick=()=>{month=new Date(month.getFullYear(),month.getMonth()+1,1);render();};
   $('todayBtn').onclick=()=>{month=new Date(today.getFullYear(),today.getMonth(),1);render();};
   render();
-  if(!ready){location.replace('/admin.html');}
+  if(!ready){applyAccess();}
   else {
     db.auth.onAuthStateChange((_event,newSession)=>{
       // Queue the refresh after Supabase finishes processing the auth change.
