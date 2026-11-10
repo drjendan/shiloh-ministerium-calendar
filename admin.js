@@ -85,7 +85,21 @@
       redirectTo:location.origin+'/admin.html'
     });
     $('sendReset').disabled=false;
-    if(error) {notice('Could not send the password email. Please contact an administrator if the problem continues.',true);return;}
+    if(error) {
+      const code = String(error.code || '').toLowerCase();
+      const message = String(error.message || '').toLowerCase();
+      const status = error.status || '';
+      if(code === 'email_address_not_authorized' || message.includes('email address not authorized')) {
+        notice('Supabase cannot send to this email with its default mail service. Configure Custom SMTP under Supabase Authentication settings to send password links to Ministerium members.',true);
+      } else if(code === 'over_email_send_rate_limit' || status === 429 || message.includes('rate limit')) {
+        notice('Supabase email sending limit has been reached. Please try again after the limit resets, or configure Custom SMTP for reliable member emails.',true);
+      } else if(message.includes('smtp') || message.includes('sending recovery email') || message.includes('error sending')) {
+        notice('Supabase could not deliver the recovery email. Check Authentication logs and the SMTP/email provider configuration. Error: '+String(error.message || 'email delivery failed'),true);
+      } else {
+        notice('Unable to send password setup email ('+(code || status || 'unknown')+'). Check Supabase Authentication logs for the cause. '+String(error.message || ''),true);
+      }
+      return;
+    }
     notice('If your account is registered, a password setup link has been sent to your email.');
   };
 
