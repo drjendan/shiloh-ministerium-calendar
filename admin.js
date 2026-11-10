@@ -11,7 +11,7 @@
   if (!valid) {notice('Sign-in is temporarily unavailable. Please contact the calendar administrator.',true);$('signInBtn').disabled=true;return;}
   const db=window.supabase.createClient(c.supabaseUrl,c.supabaseAnonKey);
   const params=new URLSearchParams(location.search);
-  const isRecovery=params.get('type')==='recovery' || location.hash.includes('type=recovery');
+  const isRecovery=params.get('type')==='recovery' || params.has('code') || location.hash.includes('type=recovery');
   let recoveryMode=isRecovery;
 
   function showRecovery() {
