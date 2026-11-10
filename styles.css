@@ -9,3 +9,8 @@
 .text-link{background:none;border:0;color:var(--green);font-size:13px;text-decoration:underline;padding:10px 0;margin-top:10px}
 .login-panel .status{margin:18px 0}
 @media(max-width:570px){.login-shell{padding:20px 10px}.login-panel{padding:24px 18px}}
+
+/* Temporary access-free interface review; private event data remains protected by Supabase RLS */
+.preview-notice{padding:13px 16px;margin-bottom:18px;border:1px solid #d9d8bd;background:#faf7e9;color:#635b37;border-radius:10px;font-size:13px}
+.header-actions{flex-wrap:wrap;justify-content:flex-end}
+.preview-notice[hidden]{display:none}
