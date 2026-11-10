@@ -67,3 +67,16 @@ The app deliberately uses `shouldCreateUser:false`, so requesting an email sign-
 
 ### CRITICAL: Migration must be run in the live Supabase project
 A login screen on the website does not secure direct API access. The calendar is not private until the members-only SQL migration succeeds and its RLS policies take effect. If confidential events exist, temporarily unpublish or restrict the site until you have applied the database migration and tested anonymous access denial.
+
+## Temporary calendar and admin interface preview (while email sending is unavailable)
+
+The homepage now displays the calendar shell without requiring sign-in and includes an **Admin Preview** toggle. Preview forms for event creation, category management, member administration and administrator management are **disabled and do not save**.
+
+- **No private events or category data is requested from Supabase when a visitor is not authenticated and approved.**
+- All real calendar CRUD operations remain restricted to Supabase-authorized administrators.
+- Database RLS defined by `supabase/migrations/20261110_members_only.sql` remains required and should be verified as applied.
+- **Do not enter confidential event data until the live database has been confirmed to enforce member-only reads.**
+- Email/passwordless login is not required to preview the layout but will still be needed to access real data after email delivery has been restored.
+- The preview is intentionally reachable by anyone who knows the Netlify URL; the real calendar entries are not made public by this feature.
+
+After configuring a Resend domain and SMTP, disable the preview and reinstate the member sign-in flow.
