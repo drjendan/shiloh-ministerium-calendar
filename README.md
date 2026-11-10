@@ -38,3 +38,14 @@ Clone the repository into `C:\Users\danie\shiloh-ministerium-calendar` and run a
 - The logo is hotlinked to the official website and may need local hosting with church permission later. If Shiloh updates the image URL, update the header `img` in `index.html`.
 - For a production launch, set up reliable backups, operational monitoring, and a suitable SMTP/email delivery service if needed.
 - This branch is for review. Do not merge or deploy publicly until real admin email, Supabase configuration, and access tests are complete.
+
+## Event category management (November 2026 update)
+If the original schema was already applied, run `supabase/migrations/20261110_admin_categories.sql` in the **same Supabase project's SQL Editor**. This migration preserves existing events and replaces the fixed list of category names with an administrator-managed `calendar_categories` table protected by RLS.
+
+- Admins may add/delete categories via **Manage Categories** or add one while saving an event.
+- Public category filters appear **only** for categories currently used by visible calendar events.
+- Deleting a category does not delete events; the events become uncategorized.
+- If deploying to a new Supabase project, run `supabase/schema.sql` first and then the category migration.
+
+### Login error: Signups not allowed for otp
+The app deliberately uses `shouldCreateUser:false`, so requesting an email sign-in link does **not** automatically register arbitrary email addresses. The calendar owner must add the matching email to `calendar_admins` **and** provision/invite the same email through **Supabase Authentication > Users**. Then configure Supabase Auth Site URL and Redirect URLs for the Netlify domain and ensure the email provider can deliver sign-in links. Do not change `shouldCreateUser` to true just to bypass registration; admin privileges are enforced by database RLS.
