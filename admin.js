@@ -2,121 +2,69 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const c = window.SHILOH_CONFIG || {};
-  const valid = !!(window.supabase && c.supabaseUrl?.startsWith('https://') && c.supabaseAnonKey && !c.supabaseAnonKey.includes('YOUR_'));
-  const notice = (msg,error=false) => {
-    $('loginNotice').hidden=false;
-    $('loginNotice').className='status '+(error?'error':'success');
-    $('loginNotice').textContent=msg;
+  const notice = (message, isError = false) => {
+    $('loginNotice').hidden = false;
+    $('loginNotice').className = 'status ' + (isError ? 'error' : 'success');
+    $('loginNotice').textContent = message;
   };
-  if (!valid) {notice('Sign-in is temporarily unavailable. Please contact the calendar administrator.',true);$('signInBtn').disabled=true;return;}
-  const db=window.supabase.createClient(c.supabaseUrl,c.supabaseAnonKey);
-  const params=new URLSearchParams(location.search);
-  const isRecovery=params.get('type')==='recovery' || params.has('code') || location.hash.includes('type=recovery');
-  let recoveryMode=isRecovery;
-
-  function showRecovery() {
-    recoveryMode=true;
-    $('passwordLogin').hidden=true;
-    $('forgotPassword').hidden=true;
-    $('resetForm').hidden=true;
-    $('newPasswordForm').hidden=false;
-    $('loginTitle').textContent='Set Your Password';
+  const valid = !!(window.supabase && c.supabaseUrl?.startsWith('https://') &&
+    c.supabaseAnonKey && !c.supabaseAnonKey.includes('YOUR_'));
+  if (!valid) {
+    notice('Sign-in is unavailable because the calendar is not fully configured. Please contact the calendar owner.', true);
+    $('sendLinkBtn').disabled = true;
+    return;
   }
-
-  if (isRecovery) showRecovery();
-
-  async function verifyMembership() {
-    const {data,error}=await db.rpc('calendar_can_view');
-    return !error && data===true;
-  }
-
-  async function signedInRedirect() {
-    const member=await verifyMembership();
-    if (!member) {
+  const db = window.supabase.createClient(c.supabaseUrl, c.supabaseAnonKey);
+  let checking = false;
+  const checkAccess = async () => {
+    if (checking) return;
+    checking = true;
+    try {
+      const { data: { session }, error: sessionError } = await db.auth.getSession();
+      if (sessionError || !session) return;
+      const { data: approved, error } = await db.rpc('calendar_can_view');
+      if (!error && approved === true) {
+        location.replace('/');
+        return;
+      }
       await db.auth.signOut();
-      notice('This account has not been approved for the Ministerium calendar. Please contact the calendar owner.',true);
-      return;
+      notice('This email does not have access to the Ministerium calendar. Please contact the calendar owner.', true);
+    } finally {
+      checking = false;
     }
-    location.replace('/');
-  }
-
+  };
   db.auth.onAuthStateChange((event) => {
-    if (event==='PASSWORD_RECOVERY') {
-      showRecovery();
-    }
+    if (event === 'SIGNED_IN') setTimeout(checkAccess, 0);
   });
+  checkAccess();
 
-  if (!recoveryMode) {
-    db.auth.getSession().then(async ({data}) => {
-      if (data.session && !recoveryMode) await signedInRedirect();
+  $('linkLogin').onsubmit = async event => {
+    event.preventDefault();
+    const button = $('sendLinkBtn');
+    button.disabled = true;
+    const email = $('memberEmail').value.trim().toLowerCase();
+    const { error } = await db.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: location.origin + '/admin.html'
+      }
     });
-  }
-
-  $('passwordLogin').onsubmit=async ev=>{
-    ev.preventDefault();
-    $('signInBtn').disabled=true;
-    const email=$('adminEmail').value.trim().toLowerCase(), password=$('adminPassword').value;
-    const {error}=await db.auth.signInWithPassword({email,password});
-    $('signInBtn').disabled=false;
-    if(error){ notice('Unable to sign in. Check your email and password.',true); return;}
-    await signedInRedirect();
-  };
-
-  $('forgotPassword').onclick=()=>{
-    $('passwordLogin').hidden=true;
-    $('forgotPassword').hidden=true;
-    $('resetForm').hidden=false;
-    $('resetEmail').value=$('adminEmail').value;
-    $('loginTitle').textContent='Set or Reset Password';
-  };
-
-  $('cancelReset').onclick=()=>{
-    $('resetForm').hidden=true;
-    $('passwordLogin').hidden=false;
-    $('forgotPassword').hidden=false;
-    $('loginTitle').textContent='Member Sign In';
-    $('loginNotice').hidden=true;
-  };
-
-  $('resetForm').onsubmit=async ev=>{
-    ev.preventDefault();
-    $('sendReset').disabled=true;
-    const {error}=await db.auth.resetPasswordForEmail($('resetEmail').value.trim().toLowerCase(),{
-      redirectTo:location.origin+'/admin.html'
-    });
-    $('sendReset').disabled=false;
-    if(error) {
+    button.disabled = false;
+    if (error) {
+      const msg = String(error.message || '');
       const code = String(error.code || '').toLowerCase();
-      const message = String(error.message || '').toLowerCase();
-      const status = error.status || '';
-      if(code === 'email_address_not_authorized' || message.includes('email address not authorized')) {
-        notice('Supabase cannot send to this email with its default mail service. Configure Custom SMTP under Supabase Authentication settings to send password links to Ministerium members.',true);
-      } else if(code === 'over_email_send_rate_limit' || status === 429 || message.includes('rate limit')) {
-        notice('Supabase email sending limit has been reached. Please try again after the limit resets, or configure Custom SMTP for reliable member emails.',true);
-      } else if(message.includes('smtp') || message.includes('sending recovery email') || message.includes('error sending')) {
-        notice('Supabase could not deliver the recovery email. Check Authentication logs and the SMTP/email provider configuration. Error: '+String(error.message || 'email delivery failed'),true);
+      if (code === 'over_email_send_rate_limit' || error.status === 429 || /rate limit/i.test(msg)) {
+        notice('Supabase email limit reached. Try again after the limit resets. For dependable member access, a custom email provider will be needed.', true);
+      } else if (code === 'email_address_not_authorized' || /not authorized/i.test(msg)) {
+        notice('Supabase cannot send email to this address using the current email settings. Contact the calendar owner.', true);
+      } else if (/signups not allowed for otp/i.test(msg)) {
+        notice('This email must first be created or invited under Supabase Authentication → Users. Contact the calendar owner.', true);
       } else {
-        notice('Unable to send password setup email ('+(code || status || 'unknown')+'). Check Supabase Authentication logs for the cause. '+String(error.message || ''),true);
+        notice('The sign-in email could not be sent (' + (code || msg || 'unknown error') + '). Check Supabase Authentication logs.', true);
       }
       return;
     }
-    notice('If your account is registered, a password setup link has been sent to your email.');
-  };
-
-  $('newPasswordForm').onsubmit=async ev=>{
-    ev.preventDefault();
-    if($('newPassword').value!==$('confirmPassword').value) {notice('Passwords do not match.',true);return;}
-    $('savePassword').disabled=true;
-    const {error}=await db.auth.updateUser({password:$('newPassword').value});
-    $('savePassword').disabled=false;
-    if(error){ notice('Unable to save your password: '+error.message,true);return;}
-    notice('Password saved. Your account will now be checked for calendar access.');
-    const authorized=await verifyMembership();
-    if(authorized) location.replace('/');
-    else {
-      await db.auth.signOut();
-      notice('Password saved, but this email has not been approved to view the calendar. Contact the calendar owner.',true);
-      $('newPasswordForm').hidden=true;
-    }
+    notice('If your account is registered, a secure sign-in link has been requested. Check your email and spam folder.');
   };
 })();
