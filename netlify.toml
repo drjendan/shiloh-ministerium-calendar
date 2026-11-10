@@ -1,5 +1,6 @@
 [build]
-  publish = "."
+  command = "node build.cjs"
+  publish = "dist"
 
 [[headers]]
   for = "/*"
