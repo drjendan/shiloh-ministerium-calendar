@@ -7,7 +7,7 @@
   let categories = [];
   const today = new Date();
   let month = new Date(today.getFullYear(), today.getMonth(), 1);
-  let filter = 'All', events = [], session = null, isAdmin = false, isOwner = false, adminDirectory = [];
+  let filter = 'All', events = [], session = null, isMember = false, isAdmin = false, isOwner = false, adminDirectory = [];
   const pad = n => String(n).padStart(2,'0');
   const dateKey = d => [d.getFullYear(),pad(d.getMonth()+1),pad(d.getDate())].join('-');
   const esc = x => String(x ?? '').replace(/[&<>"']/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
@@ -26,13 +26,15 @@
   function applyAccess() {
     $('adminBar').hidden = !isAdmin;
     $('adminUsersBtn').hidden = !isOwner;
+    $('manageMembersBtn').hidden = !isOwner;
+    $('privateApp').hidden = !isMember;
     $('manageCategoriesBtn').hidden = !isAdmin;
     $('userBadge').hidden = !session;
     $('userBadge').textContent = session?.user?.email || '';
-    $('loginBtn').textContent = session ? 'Sign Out' : 'Admin Login';
+    $('loginBtn').textContent = session && isMember ? 'Sign Out' : 'Member Sign In';
   }
   async function fetchCategories() {
-    if (!db) return;
+    if (!db || !isMember) return;
     const {data,error} = await db.from('calendar_categories').select('name').order('name');
     if (error) {
       notify('Unable to load categories. Run the new Supabase category migration: '+errorText(error),'error');
@@ -42,7 +44,7 @@
     render();
   }
   async function fetchEvents() {
-    if (!db) return;
+    if (!db || !isMember) return;
     const {data,error} = await db.from('calendar_events')
       .select('id,title,event_date,start_time,end_time,category,location,description,published')
       .order('event_date',{ascending:true}).order('start_time',{ascending:true});
@@ -53,15 +55,26 @@
     if (!db) {applyAccess();return;}
     const {data:{session:s},error} = await db.auth.getSession();
     if (error) notify(errorText(error),'error');
-    session = s; isAdmin = false; isOwner = false;
-    if (session) {
-      const [a,o] = await Promise.all([db.rpc('calendar_is_admin'),db.rpc('calendar_is_owner')]);
-      if (a.error || o.error) notify('Unable to verify administrator access.','error');
-      isAdmin = a.data === true && !a.error;
-      isOwner = o.data === true && !o.error;
-      if (!isAdmin) notify('This email account is not authorized to administer the Ministerium calendar.','error');
+    session = s; isMember = false; isAdmin = false; isOwner = false;
+    if (!session) {
+      applyAccess();
+      location.replace('/admin.html');
+      return;
     }
-    applyAccess();await Promise.all([fetchCategories(),fetchEvents()]);
+    const memberCheck = await db.rpc('calendar_can_view');
+    if (memberCheck.error || memberCheck.data !== true) {
+      applyAccess();
+      await db.auth.signOut();
+      location.replace('/admin.html');
+      return;
+    }
+    isMember = true;
+    const [a,o] = await Promise.all([db.rpc('calendar_is_admin'),db.rpc('calendar_is_owner')]);
+    if (a.error || o.error) notify('Administrator permissions could not be verified.','error');
+    isAdmin = a.data === true && !a.error;
+    isOwner = o.data === true && !o.error;
+    applyAccess();
+    await Promise.all([fetchCategories(),fetchEvents()]);
   }
   async function doLogin() {
     if (!db) {notify('Administrator login requires the Supabase configuration to be completed.','error');return;}
@@ -153,6 +166,38 @@
       $('categoryName').value='';await fetchCategories();draw();
     };
   }
+  async function manageMembers() {
+    if (!isOwner) return;
+    const {data,error}=await db.from('calendar_members').select('email').order('email');
+    if(error){notify('Unable to load approved members. Apply the members-only Supabase migration.','error');return;}
+    let members=data||[];
+    showModal('Manage Calendar Members',
+      '<p>Only approved members can view the calendar. Register each approved email in Supabase Authentication → Users and invite the member to set a password.</p><div id="memberList"></div>'+
+      '<form id="memberForm"><label class="field" for="memberEmail">Member email address</label>'+
+      '<input class="fieldinput" type="email" id="memberEmail" autocomplete="off" required placeholder="member@example.com">'+
+      '<div class="form-error" id="memberError" role="alert"></div>'+
+      '<div class="actions"><button class="btn primary" type="submit">Approve Member</button></div></form>');
+    const draw=()=>{
+      $('memberList').innerHTML=members.length?members.map(x=>'<div class="admin-entry"><span>'+esc(x.email)+'</span><button class="btn" type="button" data-member="'+esc(x.email)+'">Remove</button></div>').join(''):'<p class="empty">No additional members have been approved yet. Administrators automatically have access.</p>';
+      $('memberList').querySelectorAll('[data-member]').forEach(btn=>btn.onclick=async()=>{
+        const email=btn.dataset.member;
+        if(!confirm('Remove viewing access for '+email+'?'))return;
+        const {error}=await db.from('calendar_members').delete().eq('email',email);
+        if(error){$('memberError').textContent=errorText(error);return;}
+        members=members.filter(x=>x.email!==email);draw();
+      });
+    };
+    draw();
+    $('memberForm').onsubmit=async ev=>{
+      ev.preventDefault();$('memberError').textContent='';
+      const email=$('memberEmail').value.trim().toLowerCase();
+      const {error}=await db.from('calendar_members').insert({email});
+      if(error){$('memberError').textContent=errorText(error);return;}
+      members.push({email});members.sort((a,b)=>a.email.localeCompare(b.email));
+      $('memberEmail').value='';draw();
+      notify('Member approved. Create or invite their account in Supabase Authentication before they can sign in.','success');
+    };
+  }
   async function manageAdmins() {
     if(!isOwner)return;
     const {data,error}=await db.from('calendar_admins').select('email,role').order('email');
@@ -203,15 +248,16 @@
   $('overlay').onclick=e=>{if(e.target===$('overlay'))closeModal();};
   $('closeModal').onclick=closeModal;
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('overlay').hidden)closeModal();});
-  $('loginBtn').onclick=async()=>{if(!session)await doLogin();else {await db.auth.signOut();await refreshAuth();notify('Signed out.','success');}};
+  $('loginBtn').onclick=async()=>{if(!session || !isMember){location.assign('/admin.html');return;} await db.auth.signOut();location.replace('/admin.html');};
   $('addBtn').onclick=()=>showEventForm(null);
   $('adminUsersBtn').onclick=manageAdmins;
+  $('manageMembersBtn').onclick=manageMembers;
   $('manageCategoriesBtn').onclick=manageCategories;
   $('prevBtn').onclick=()=>{month=new Date(month.getFullYear(),month.getMonth()-1,1);render();};
   $('nextBtn').onclick=()=>{month=new Date(month.getFullYear(),month.getMonth()+1,1);render();};
   $('todayBtn').onclick=()=>{month=new Date(today.getFullYear(),today.getMonth(),1);render();};
   render();
-  if(!ready){notify('Calendar service has not been configured yet. Connect Supabase to publish and manage events.');}
+  if(!ready){location.replace('/admin.html');}
   else {
     db.auth.onAuthStateChange((_event,newSession)=>{
       // Queue the refresh after Supabase finishes processing the auth change.

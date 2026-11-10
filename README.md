@@ -49,3 +49,21 @@ If the original schema was already applied, run `supabase/migrations/20261110_ad
 
 ### Login error: Signups not allowed for otp
 The app deliberately uses `shouldCreateUser:false`, so requesting an email sign-in link does **not** automatically register arbitrary email addresses. The calendar owner must add the matching email to `calendar_admins` **and** provision/invite the same email through **Supabase Authentication > Users**. Then configure Supabase Auth Site URL and Redirect URLs for the Netlify domain and ensure the email provider can deliver sign-in links. Do not change `shouldCreateUser` to true just to bypass registration; admin privileges are enforced by database RLS.
+
+## PRIVATE MEMBERS-ONLY ACCESS (required before declaring this site secure)
+
+**All calendar events and categories are now restricted to approved, signed-in members.** The browser redirects visitors to `/admin.html`, a member login page. The login URL itself is reachable by anyone, but the calendar and its Postgres data are NOT, after the migration has been applied.
+
+### Mandatory security migration
+
+1. In Supabase SQL Editor run `supabase/schema.sql` if this is a new project.
+2. Run `supabase/migrations/20261110_admin_categories.sql` if not already applied. It creates `public.calendar_categories`.
+3. Run `supabase/migrations/20261110_members_only.sql` to **revoke anonymous reads of calendar events and categories** and create `public.calendar_members`.
+4. In **Authentication → Users**, invite/provision each member's own email. Membership in `calendar_members` alone does NOT create an Auth user.
+5. Owners can approve/revoke ordinary member access with the **Manage Members** button, which updates `calendar_members`. Registered admins have member reading access automatically. Only owners manage members; only admins manage events.
+6. Under **Authentication → URL Configuration**, set the Site URL to `https://shiloh-ministerium-calendar.netlify.app` and allow `https://shiloh-ministerium-calendar.netlify.app/admin.html` for password reset redirects. Enable Email provider/password authentication. Configure SMTP if necessary.
+7. Members can use the **Set or reset your password** link on the sign-in page after an Auth user has been created. The login uses `signInWithPassword` and standard browser password manager autocomplete. The app does NOT save any plaintext passwords.
+8. Open the website in an incognito window to confirm a visitor sees only the member sign-in, then verify approved member reads, non-member denial, admin editing, and owner membership management.
+
+### CRITICAL: Migration must be run in the live Supabase project
+A login screen on the website does not secure direct API access. The calendar is not private until the members-only SQL migration succeeds and its RLS policies take effect. If confidential events exist, temporarily unpublish or restrict the site until you have applied the database migration and tested anonymous access denial.

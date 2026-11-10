@@ -40,7 +40,7 @@ if (supabaseKey.split(".").length === 3) {
 
 const outDir = path.join(__dirname, "dist");
 fs.mkdirSync(outDir, {recursive:true});
-for (const name of ["index.html", "styles.css", "app.js"]) {
+for (const name of ["index.html", "admin.html", "admin.js", "styles.css", "app.js"]) {
   fs.copyFileSync(path.join(__dirname, name), path.join(outDir, name));
 }
 fs.writeFileSync(path.join(outDir, "config.js"),
